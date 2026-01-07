@@ -1,6 +1,6 @@
 # custos
+
 Custos is a lightweight, policy-driven helper library for applying explicit, auditable guardrails to common data transformations at ingestion time.
-=======
 ## Custos
 
 Custos is a lightweight, policy-driven helper library for applying explicit, auditable guardrails to common data transformations at ingestion time.
@@ -9,7 +9,7 @@ Custos helps data engineers make routine transformations—such as JSON flatteni
 
 Custos is Latin for “guardian.”
 
-### Why Custos exists
+## Why Custos exists
 
 In many data pipelines, the same transformation logic is repeatedly rewritten:
 
@@ -35,7 +35,7 @@ These transformations are often:
 
 Custos makes these decisions explicit by defining them once, as policy, and applying them consistently.
 
-### What Custos is (and is not)
+## What Custos is (and is not)
 ✅ Custos is
 
 - A helper library, not a platform
@@ -63,7 +63,7 @@ Custos makes these decisions explicit by defining them once, as policy, and appl
 Custos deliberately avoids “magic.”
 If data is changed, dropped, or rejected, it is logged and reported.
 
-### Core features
+## Core features
 
 - Controlled JSON flattening (with depth and array handling)
 
@@ -77,7 +77,7 @@ If data is changed, dropped, or rejected, it is logged and reported.
 
 - Structured audit reports for every run
 
-### Design principles
+## Design principles
 
 - Explicit over clever
 
@@ -91,7 +91,7 @@ If data is changed, dropped, or rejected, it is logged and reported.
 
 Custos is designed to complement existing pipelines, not redefine them.
 
-### Quick example
+## Quick example
 
 ```python
 from custos import PolicyTransformer
