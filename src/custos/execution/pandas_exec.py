@@ -5,12 +5,12 @@ from typing import Any
 
 import pandas as pd
 
-from custos.enums import OnConflict, OnMissing
+from custos.enums import OnCastFail, OnConflict, OnMissing
 from custos.errors import ExecutionError
-from custos.planning.plan import Plan
-from custos.planning.steps import RenameColumnsStep
-from custos.report.models import Report
 from custos.execution.base import Executor
+from custos.planning.plan import Plan
+from custos.planning.steps import CastTypesStep, RenameColumnsStep
+from custos.report.models import Report
 
 log = logging.getLogger(__name__)
 
@@ -39,10 +39,11 @@ class PandasExecutor(Executor):
         for step in plan.steps:
             if isinstance(step, RenameColumnsStep):
                 out = self._rename(out, step, report, mode)
+            elif isinstance(step, CastTypesStep):
+                out = self._cast_types(out, step, report, mode)
             else:
                 raise ExecutionError(f"Unsupported step type for pandas: {type(step)}")
 
-        # finalize report
         report.rows_out = int(out.shape[0])
         report.columns_out = list(out.columns)
         return out, report
@@ -56,7 +57,6 @@ class PandasExecutor(Executor):
     ) -> pd.DataFrame:
         mapping = step.mapping
 
-        # Check missing source columns
         missing = [src for src in mapping.keys() if src not in df.columns]
         if missing:
             msg = f"Missing source columns for rename: {missing}"
@@ -68,10 +68,8 @@ class PandasExecutor(Executor):
             else:
                 report.add("rename_missing_sources_ignored", missing=missing)
 
-        # Only apply mapping for sources that exist
         effective = {src: tgt for src, tgt in mapping.items() if src in df.columns}
 
-        # Detect conflicts (target already exists as a different column)
         conflicts = []
         for src, tgt in effective.items():
             if tgt in df.columns and tgt != src:
@@ -94,3 +92,137 @@ class PandasExecutor(Executor):
         df2 = df.rename(columns=effective)
         report.add("rename_applied", mapping=effective)
         return df2
+
+    def _cast_types(
+        self,
+        df: pd.DataFrame,
+        step: CastTypesStep,
+        report: Report,
+        mode: str,
+    ) -> pd.DataFrame:
+        
+        if mode == "dry_run":
+            missing_cols = [c for c in step.types.keys() if c not in df.columns]
+            report.add(
+            "cast_dry_run",
+            types=step.types,
+            on_cast_fail=step.on_cast_fail.value,
+            datetime_format=step.datetime_format,
+            missing_columns=missing_cols,
+            )
+            return df
+
+
+
+        # Only apply casts for columns that exist
+        missing_cols = [c for c in step.types.keys() if c not in df.columns]
+        if missing_cols:
+            # Casting missing columns is a policy/config issue; fail loudly.
+            raise ExecutionError(f"Cast requested for missing columns: {missing_cols}")
+
+
+        out = df.copy()
+
+        failures: dict[str, dict[str, Any]] = {}
+        any_failed_mask = pd.Series(False, index=out.index)
+
+        for col, target in step.types.items():
+            s = out[col]
+            failed_mask = pd.Series(False, index=out.index)
+
+            # We'll create a candidate converted series; any conversion error becomes NaN/NaT, tracked via mask.
+            if target == "string":
+                converted = s.astype("string")
+                # string conversion rarely "fails"; treat nulls as-is
+            elif target == "int":
+                numeric = pd.to_numeric(s, errors="coerce")
+                failed_mask = numeric.isna() & s.notna()
+                converted = numeric.astype("Int64")  # nullable integer
+            elif target == "float":
+                numeric = pd.to_numeric(s, errors="coerce")
+                failed_mask = numeric.isna() & s.notna()
+                converted = numeric.astype("Float64")  # nullable float
+            elif target == "bool":
+                # Conservative bool casting: accept actual bools, or strings like true/false/1/0/yes/no
+                converted, failed_mask = self._to_bool_series(s)
+            elif target == "datetime":
+                converted = pd.to_datetime(s, errors="coerce", format=step.datetime_format)
+                failed_mask = converted.isna() & s.notna()
+            elif target == "date":
+                dt = pd.to_datetime(s, errors="coerce", format=step.datetime_format)
+                failed_mask = dt.isna() & s.notna()
+                converted = dt.dt.date
+            else:
+                raise ExecutionError(f"Unsupported cast type in pandas executor: {target}")
+
+            fail_count = int(failed_mask.sum())
+            if fail_count > 0:
+                any_failed_mask = any_failed_mask | failed_mask
+                # capture up to 5 sample bad values
+                bad_values = s[failed_mask].head(5).tolist()
+                failures[col] = {"type": target, "count": fail_count, "samples": bad_values}
+
+            # Apply based on policy
+            if fail_count > 0 and step.on_cast_fail == OnCastFail.SET_NULL:
+                # null out bad entries only
+                converted = converted.copy()
+                converted[failed_mask] = pd.NA
+
+            out[col] = converted
+
+        if failures:
+            report.add(
+                "cast_failures",
+                failures=failures,
+                on_cast_fail=step.on_cast_fail.value,
+            )
+
+        if failures and step.on_cast_fail == OnCastFail.ERROR:
+            raise ExecutionError(f"Cast failures encountered: {failures}")
+
+        if failures and step.on_cast_fail == OnCastFail.DROP_ROW:
+            before = int(out.shape[0])
+            out = out.loc[~any_failed_mask].copy()
+            dropped = before - int(out.shape[0])
+            report.add("rows_dropped_due_to_cast", dropped=dropped)
+
+        report.add("cast_applied", types=step.types)
+        return out
+
+    def _to_bool_series(self, s: pd.Series) -> tuple[pd.Series, pd.Series]:
+        """
+        Conservative boolean conversion.
+        Accepts booleans, 1/0, and strings: true/false/yes/no/y/n/t/f.
+        Everything else fails.
+        """
+        failed = pd.Series(False, index=s.index)
+
+        # Start with NA
+        out = pd.Series(pd.NA, index=s.index, dtype="boolean")
+
+        # Already bool
+        is_bool = s.apply(lambda x: isinstance(x, bool))
+        out[is_bool] = s[is_bool].astype("boolean")
+
+        # Numeric 1/0
+        is_num = s.apply(lambda x: isinstance(x, (int, float)) and not isinstance(x, bool))
+        num = pd.to_numeric(s[is_num], errors="coerce")
+        ok_num = num.isin([0, 1])
+        out.loc[num.index[ok_num]] = num[ok_num].astype(int).astype("boolean")
+        failed.loc[num.index[~ok_num & num.notna()]] = True
+
+        # Strings
+        is_str = s.apply(lambda x: isinstance(x, str))
+        if is_str.any():
+            lowered = s[is_str].str.strip().str.lower()
+            true_set = {"true", "t", "yes", "y", "1"}
+            false_set = {"false", "f", "no", "n", "0"}
+            is_true = lowered.isin(list(true_set))
+            is_false = lowered.isin(list(false_set))
+            out.loc[lowered.index[is_true]] = True
+            out.loc[lowered.index[is_false]] = False
+            failed.loc[lowered.index[~(is_true | is_false) & lowered.notna()]] = True
+
+        # Anything non-null that still NA is a failure (e.g., objects)
+        failed = failed | (out.isna() & s.notna())
+        return out, failed

@@ -17,3 +17,8 @@ class OnMissing(str, Enum):
 class OnConflict(str, Enum):
     ERROR = "error"
     OVERWRITE = "overwrite"
+
+class OnCastFail(str, Enum):
+    ERROR = "error"
+    DROP_ROW = "drop_row"
+    SET_NULL = "set_null"

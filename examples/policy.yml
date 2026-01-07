@@ -4,7 +4,15 @@ schema:
   rename:
     "Total Price": "total_price"
     "Order ID": "order_id"
-    'Customer Name': 'customer_name'
+    
+  types:
+    order_id: int
+    total_price: float
+
+  cast:
+    on_cast_fail: set_null  # error | drop_row | set_null 
+    date_format: "%Y-%m-%d"
+
 
   # Behavior when a source column is missing
   on_missing: warn      # error | warn | ignore
