@@ -1,12 +1,20 @@
-# Python packaging
-*.egg-info/
-dist/
-build/
+# Python bytecode
+__pycache__/
+*.pyc
 
 # Virtual environments
 .venv/
 venv/
 
-# Bytecode
-__pycache__/
-*.pyc
+# Packaging artifacts
+*.egg-info/
+build/
+dist/
+
+# Test / coverage
+.coverage
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
