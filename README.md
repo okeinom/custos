@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # custos
 Custos is a lightweight, policy-driven helper library for applying explicit, auditable guardrails to common data transformations at ingestion time.
 =======
@@ -132,4 +131,3 @@ A structured report explains exactly what changed and why.
 
 Custos is currently early-stage and intentionally small.
 The API is designed to be stable, predictable, and easy to reason about.
->>>>>>> 6e35b87 (Ignore egg-info build artifacts)
