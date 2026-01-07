@@ -1,0 +1,13 @@
+version: 1
+
+schema:
+  rename:
+    "Total Price": "total_price"
+    "Order ID": "order_id"
+    'Customer Name': 'customer_name'
+
+  # Behavior when a source column is missing
+  on_missing: warn      # error | warn | ignore
+
+  # Behavior when the target column already exists
+  on_conflict: error    # error | overwrite

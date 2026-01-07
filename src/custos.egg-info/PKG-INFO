@@ -1,7 +1,44 @@
-<<<<<<< HEAD
-# custos
-Custos is a lightweight, policy-driven helper library for applying explicit, auditable guardrails to common data transformations at ingestion time.
-=======
+Metadata-Version: 2.4
+Name: custos
+Version: 0.1.0
+Summary: Policy-driven guardrails for common data transformations
+Author: Okeino McGowan
+License: MIT License
+        
+        Copyright (c) 2026 Okeino McGowan
+        
+Project-URL: Homepage, https://github.com/okeino/custos
+Project-URL: Repository, https://github.com/okeino/custos
+Project-URL: Issues, https://github.com/okeino/custos/issues
+Keywords: data-engineering,data-quality,data-transformation,policy-as-code,etl
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Information Technology
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Database
+Classifier: Topic :: Scientific/Engineering
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pandas>=1.5
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: polars
+Requires-Dist: polars>=0.20; extra == "polars"
+Provides-Extra: spark
+Requires-Dist: pyspark>=3.5; extra == "spark"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Dynamic: license-file
+
 ## Custos
 
 Custos is a lightweight, policy-driven helper library for applying explicit, auditable guardrails to common data transformations at ingestion time.
@@ -132,4 +169,3 @@ A structured report explains exactly what changed and why.
 
 Custos is currently early-stage and intentionally small.
 The API is designed to be stable, predictable, and easy to reason about.
->>>>>>> 6e35b87 (Ignore egg-info build artifacts)
