@@ -20,3 +20,8 @@ class CastTypesStep:
 class QualityRulesStep:
     rules: tuple[dict, ...]               # keep engine-agnostic (plain dicts)
     default_on_fail: OnQualityFail   
+
+@dataclass(frozen=True)
+class PiiStep:
+    rules: tuple[dict, ...]   # dicts keep it engine-agnostic + serializable
+    on_missing: str

@@ -4,27 +4,35 @@ schema:
   rename:
     "Total Price": "total_price"
     "Order ID": "order_id"
-    
+
   types:
     order_id: int
     total_price: float
 
   cast:
-    on_cast_fail: set_null  # error | drop_row | set_null 
-    date_format: "%Y-%m-%d"
+    on_cast_fail: set_null   # error | drop_row | set_null
+    datetime_format: "%Y-%m-%d"
+
+  # Behavior when a source column is missing (rename)
+  on_missing: warn           # error | warn | ignore
+
+  # Behavior when the target column already exists (rename)
+  on_conflict: error         # error | overwrite
+
+pii:
+  on_missing: warn
+  rules:
+    - column: email
+      action: mask
+      mask_style: email
 
 quality:
   default_on_fail: drop_row
   rules:
-    - column: total_price
+    - name: total_price_non_negative
+      column: total_price
       not_null: true
       min: 0
 
     - column: order_id
       not_null: true
-
-  # Behavior when a source column is missing
-  on_missing: warn      # error | warn | ignore
-
-  # Behavior when the target column already exists
-  on_conflict: error    # error | overwrite

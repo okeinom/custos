@@ -8,7 +8,8 @@ POLICY_PATH = Path(__file__).resolve().parent / "policy.yml"
 # Include one bad value so casting has something to do
 df = pd.DataFrame({
     "Total Price": ["10.5", "oops", "30.25"],   # "oops" will fail float
-    "Order ID": ["101", "102", "x"],            # "x" will fail int
+    "Order ID": ["101", "102", "x"], 
+    "email": ["john@test.com", "bad-email", None],           # "x" will fail int
 })
 
 transformer = PolicyTransformer(

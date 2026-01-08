@@ -26,3 +26,14 @@ class OnCastFail(str, Enum):
 class OnQualityFail(str, Enum):
     ERROR = "error"
     DROP_ROW = "drop_row"
+
+class PiiAction(str, Enum):
+    DROP = "drop"
+    MASK = "mask"
+    HASH = "hash"
+
+
+class MaskStyle(str, Enum):
+    EMAIL = "email"
+    FIXED = "fixed"
+    LAST4 = "last4"

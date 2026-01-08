@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from custos.planning.plan import Plan
-from custos.planning.steps import CastTypesStep, QualityRulesStep, RenameColumnsStep
+from custos.planning.steps import CastTypesStep, PiiStep, QualityRulesStep, RenameColumnsStep
 from custos.policy.model import Policy
 
 
@@ -31,14 +31,34 @@ class Planner:
                     datetime_format=self.policy.schema.cast.datetime_format,
                 )
             )
-
-        # 3) then quality
+  # 3) pii
+        pp = self.policy.schema.pii
+        if pp.rules:
+            steps.append(
+                PiiStep(
+                    rules=tuple(
+                        {
+                            "column": r.column,
+                            "action": r.action.value,
+                            "mask_style": (r.mask_style.value if r.mask_style else None),
+                            "hash": (
+                                {"algorithm": r.hash.algorithm, "salt_env": r.hash.salt_env}
+                                if r.hash else None
+                            ),
+                        }
+                        for r in pp.rules
+                    ),
+                    on_missing=pp.on_missing.value,
+                )
+            )
+        # 4) then quality
         qp = self.policy.schema.quality
         if qp.rules:
             steps.append(
                 QualityRulesStep(
                     rules=tuple(
                         {
+                            "name": r.name,
                             "column": r.column,
                             "not_null": r.not_null,
                             "min": r.min,

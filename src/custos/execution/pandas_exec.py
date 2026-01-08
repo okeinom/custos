@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 from typing import Any
 
 import pandas as pd
 
-from custos.enums import OnCastFail, OnConflict, OnMissing, OnQualityFail
+from custos.enums import MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
 from custos.errors import ExecutionError
 from custos.execution.base import Executor
 from custos.planning.plan import Plan
-from custos.planning.steps import CastTypesStep, QualityRulesStep, RenameColumnsStep
+from custos.planning.steps import CastTypesStep, PiiStep, QualityRulesStep, RenameColumnsStep
 from custos.report.models import Report
 
 log = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ class PandasExecutor(Executor):
                 out = self._rename(out, step, report, mode)
             elif isinstance(step, CastTypesStep):
                 out = self._cast_types(out, step, report, mode)
+            elif isinstance(step, PiiStep):
+                out = self._pii(out, step, report, mode)
             elif isinstance(step, QualityRulesStep):
                 out = self._quality(out, step, report, mode)
             else:
@@ -191,6 +195,120 @@ class PandasExecutor(Executor):
         report.add("cast_applied", types=step.types)
         return out
     
+    def _pii(self, df: pd.DataFrame, step: PiiStep, report: Report, mode: str) -> pd.DataFrame:
+        rules = list(step.rules)
+
+        missing_cols = [r["column"] for r in rules if r["column"] not in df.columns]
+        if missing_cols:
+            msg = f"PII rules reference missing columns: {missing_cols}"
+            if step.on_missing == OnMissing.ERROR.value:
+                raise ExecutionError(msg)
+            if step.on_missing == OnMissing.WARN.value:
+                log.warning(msg)
+                report.add("pii_missing_columns", missing=missing_cols)
+            else:
+                report.add("pii_missing_columns_ignored", missing=missing_cols)
+
+        # Filter to existing columns only
+        rules = [r for r in rules if r["column"] in df.columns]
+
+        if mode == "dry_run":
+            report.add("pii_dry_run", rules=rules)
+            return df
+
+        out = df.copy()
+
+        dropped, masked, hashed = [], [], []
+
+        for r in rules:
+            col = r["column"]
+            action = PiiAction(r["action"])
+
+            if action == PiiAction.DROP:
+                out = out.drop(columns=[col])
+                dropped.append(col)
+                continue
+
+            if action == PiiAction.MASK:
+                ms = r.get("mask_style") or "fixed"
+                ms_enum = MaskStyle(ms)
+
+                out[col] = self._mask_series(out[col], ms_enum)
+                masked.append({"column": col, "mask_style": ms_enum.value})
+                continue
+
+            if action == PiiAction.HASH:
+                h = r.get("hash") or {}
+                algo = (h.get("algorithm") or "sha256").lower()
+                if algo != "sha256":
+                    raise ExecutionError("v1 supports only sha256 hashing.")
+
+                salt_env = h.get("salt_env")
+                salt = None
+                if salt_env:
+                    salt = os.getenv(salt_env)
+                    if salt is None:
+                        # fail loudly: hashing without salt is allowed, but missing requested salt env is a config error
+                        raise ExecutionError(f"PII hash salt env var not set: {salt_env}")
+
+                out[col] = self._hash_series_sha256(out[col], salt=salt)
+                hashed.append({"column": col, "salt_env": salt_env})
+                continue
+
+            raise ExecutionError(f"Unsupported PII action: {action}")
+
+        if dropped:
+            report.add("pii_dropped", columns=dropped)
+        if masked:
+            report.add("pii_masked", columns=masked)
+        if hashed:
+            report.add("pii_hashed", columns=hashed)
+
+        report.add("pii_applied", rule_count=len(rules))
+        return out
+
+    def _mask_series(self, s: pd.Series, style: MaskStyle) -> pd.Series:
+        if style == MaskStyle.FIXED:
+            return s.apply(lambda v: "***REDACTED***" if pd.notna(v) else v)
+
+        if style == MaskStyle.EMAIL:
+            def mask_email(v):
+                if pd.isna(v):
+                    return v
+                if not isinstance(v, str) or "@" not in v:
+                    return "***REDACTED***"
+                local, domain = v.split("@", 1)
+                if len(local) <= 1:
+                    return "*" + "@" + domain
+                return local[0] + "***@" + domain
+
+            return s.apply(mask_email)
+
+        if style == MaskStyle.LAST4:
+            def last4(v):
+                if pd.isna(v):
+                    return v
+                txt = str(v)
+                digits = "".join(ch for ch in txt if ch.isdigit())
+                if len(digits) < 4:
+                    return "***REDACTED***"
+                return "***" + digits[-4:]
+
+            return s.apply(last4)
+
+        raise ExecutionError(f"Unsupported mask style: {style}")
+
+    def _hash_series_sha256(self, s: pd.Series, salt: str | None) -> pd.Series:
+        def h(v):
+            if pd.isna(v):
+                return v
+            raw = str(v)
+            payload = raw if salt is None else (salt + raw)
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+        return s.apply(h)
+
+
     def _quality(self, df: pd.DataFrame, step: QualityRulesStep, report: Report, mode: str) -> pd.DataFrame:
         # Validate referenced columns exist (in non-dry_run)
         referenced = sorted({r["column"] for r in step.rules})
@@ -215,7 +333,7 @@ class PandasExecutor(Executor):
         for idx, r in enumerate(step.rules):
             col = r["column"]
             s = df[col]
-            rule_id = f"{col}#{idx}"
+            rule_id = r.get("name") or f"{col}#{idx}"
 
             # Determine rule's on_fail
             on_fail = r.get("on_fail", None) or step.default_on_fail.value

@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from custos.enums import OnCastFail, OnConflict, OnMissing, OnQualityFail
+from custos.enums import MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
 from custos.errors import PolicyError
 
 
@@ -10,9 +10,11 @@ from custos.errors import PolicyError
 class CastPolicy:
     on_cast_fail: OnCastFail = OnCastFail.ERROR
     datetime_format: str | None = None
+    
 @dataclass(frozen=True)
 class QualityRule:
     column: str
+    name: str | None = None
     not_null: bool | None = None
     min: float | int | None = None
     max: float | int | None = None
@@ -26,11 +28,31 @@ class QualityPolicy:
     default_on_fail: OnQualityFail = OnQualityFail.DROP_ROW
 
 @dataclass(frozen=True)
+class HashPolicy:
+    algorithm: str = "sha256"
+    salt_env: str | None = None
+
+
+@dataclass(frozen=True)
+class PiiRule:
+    column: str
+    action: PiiAction
+    mask_style: MaskStyle | None = None
+    hash: HashPolicy | None = None
+
+
+@dataclass(frozen=True)
+class PiiPolicy:
+    rules: tuple[PiiRule, ...] = ()
+    on_missing: OnMissing = OnMissing.WARN   
+
+@dataclass(frozen=True)
 class SchemaPolicy:
     rename: dict[str, str] = field(default_factory=dict)
     types: dict[str, str] = field(default_factory=dict)  # e.g. {"order_id": "int"}
     cast: CastPolicy = field(default_factory=CastPolicy)
     quality: QualityPolicy = field(default_factory=QualityPolicy)
+    pii: PiiPolicy = field(default_factory=PiiPolicy)
     on_missing: OnMissing = OnMissing.WARN
     on_conflict: OnConflict = OnConflict.ERROR
 
@@ -111,7 +133,11 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
     for i, rr in enumerate(rules_raw):
         if not isinstance(rr, Mapping):
             raise PolicyError(f"`quality.rules[{i}]` must be a mapping.")
-
+        
+        name = rr.get("name")
+        if name is not None and not isinstance(name, str):
+           raise PolicyError(f"`quality.rules[{i}].name` must be a string or null.")
+        
         col = rr.get("column")
         if not isinstance(col, str) or not col.strip():
             raise PolicyError(f"`quality.rules[{i}].column` must be a non-empty string.")
@@ -139,6 +165,7 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
 
         parsed_rules.append(
             QualityRule(
+                name=name,
                 column=col,
                 not_null=not_null,
                 min=min_v,
@@ -150,6 +177,63 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
 
     quality_policy = QualityPolicy(rules=tuple(parsed_rules), default_on_fail=default_on_fail)
 
+    # --- pii ---
+    pii_raw = raw.get("pii", {}) or {}
+    if not isinstance(pii_raw, Mapping):
+        raise PolicyError("`pii` must be a mapping.")
+
+    pii_on_missing = OnMissing(pii_raw.get("on_missing", OnMissing.WARN))
+
+    pii_rules_raw = pii_raw.get("rules", []) or []
+    if not isinstance(pii_rules_raw, list):
+        raise PolicyError("`pii.rules` must be a list.")
+
+    pii_rules: list[PiiRule] = []
+    for i, rr in enumerate(pii_rules_raw):
+        if not isinstance(rr, Mapping):
+            raise PolicyError(f"`pii.rules[{i}]` must be a mapping.")
+
+        col = rr.get("column")
+        if not isinstance(col, str) or not col.strip():
+            raise PolicyError(f"`pii.rules[{i}].column` must be a non-empty string.")
+
+        action = rr.get("action")
+        if not isinstance(action, str):
+            raise PolicyError(f"`pii.rules[{i}].action` must be a string (drop/mask/hash).")
+
+        action_enum = PiiAction(action.strip().lower())
+
+        mask_style = None
+        hash_policy = None
+
+        if action_enum == PiiAction.MASK:
+            ms = rr.get("mask_style", "fixed")
+            if not isinstance(ms, str):
+                raise PolicyError(f"`pii.rules[{i}].mask_style` must be a string.")
+            mask_style = MaskStyle(ms.strip().lower())
+
+        if action_enum == PiiAction.HASH:
+            h = rr.get("hash", {}) or {}
+            if not isinstance(h, Mapping):
+                raise PolicyError(f"`pii.rules[{i}].hash` must be a mapping.")
+            algo = h.get("algorithm", "sha256")
+            if not isinstance(algo, str) or algo.strip().lower() != "sha256":
+                raise PolicyError("v1 supports only sha256 hashing.")
+            salt_env = h.get("salt_env", None)
+            if salt_env is not None and not isinstance(salt_env, str):
+                raise PolicyError(f"`pii.rules[{i}].hash.salt_env` must be a string or null.")
+            hash_policy = HashPolicy(algorithm="sha256", salt_env=salt_env)
+
+        pii_rules.append(
+            PiiRule(
+                column=col,
+                action=action_enum,
+                mask_style=mask_style,
+                hash=hash_policy,
+            )
+        )
+
+    pii_policy = PiiPolicy(rules=tuple(pii_rules), on_missing=pii_on_missing)
 
 
 
@@ -161,6 +245,7 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
             types=types,
             cast=CastPolicy(on_cast_fail=on_cast_fail, datetime_format=datetime_format),
             quality=quality_policy,
+            pii=pii_policy,
             on_missing=on_missing,
             on_conflict=on_conflict,
         ),

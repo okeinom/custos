@@ -10,6 +10,7 @@ POLICY_PATH = Path(__file__).resolve().parent / "policy.yml"
 df = pd.DataFrame({
     "Total Price": [10.5, 20.0, 30.25],
     "Order ID": [101, 102, 103],
+    "email": ["john@test.com", "bad-email", None],
 })
 
 transformer = PolicyTransformer(
