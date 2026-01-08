@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from custos.enums import OnCastFail, OnConflict, OnMissing
+from custos.enums import OnCastFail, OnConflict, OnMissing, OnQualityFail
 from custos.errors import PolicyError
 
 
@@ -10,13 +10,27 @@ from custos.errors import PolicyError
 class CastPolicy:
     on_cast_fail: OnCastFail = OnCastFail.ERROR
     datetime_format: str | None = None
+@dataclass(frozen=True)
+class QualityRule:
+    column: str
+    not_null: bool | None = None
+    min: float | int | None = None
+    max: float | int | None = None
+    accepted_values: list[str] | list[int] | list[float] | None = None
+    on_fail: OnQualityFail = OnQualityFail.DROP_ROW
 
+
+@dataclass(frozen=True)
+class QualityPolicy:
+    rules: tuple[QualityRule, ...] = ()
+    default_on_fail: OnQualityFail = OnQualityFail.DROP_ROW
 
 @dataclass(frozen=True)
 class SchemaPolicy:
     rename: dict[str, str] = field(default_factory=dict)
     types: dict[str, str] = field(default_factory=dict)  # e.g. {"order_id": "int"}
     cast: CastPolicy = field(default_factory=CastPolicy)
+    quality: QualityPolicy = field(default_factory=QualityPolicy)
     on_missing: OnMissing = OnMissing.WARN
     on_conflict: OnConflict = OnConflict.ERROR
 
@@ -81,6 +95,64 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
     datetime_format = cast_raw.get("datetime_format", None)
     if datetime_format is not None and not isinstance(datetime_format, str):
         raise PolicyError("`schema.cast.datetime_format` must be a string or null.")
+    
+    # --- quality ---
+    quality_raw = raw.get("quality", {}) or {}
+    if not isinstance(quality_raw, Mapping):
+        raise PolicyError("`quality` must be a mapping.")
+
+    default_on_fail = OnQualityFail(quality_raw.get("default_on_fail", OnQualityFail.DROP_ROW))
+
+    rules_raw = quality_raw.get("rules", []) or []
+    if not isinstance(rules_raw, list):
+        raise PolicyError("`quality.rules` must be a list.")
+
+    parsed_rules: list[QualityRule] = []
+    for i, rr in enumerate(rules_raw):
+        if not isinstance(rr, Mapping):
+            raise PolicyError(f"`quality.rules[{i}]` must be a mapping.")
+
+        col = rr.get("column")
+        if not isinstance(col, str) or not col.strip():
+            raise PolicyError(f"`quality.rules[{i}].column` must be a non-empty string.")
+
+        on_fail = OnQualityFail(rr.get("on_fail", default_on_fail))
+
+        not_null = rr.get("not_null", None)
+        if not_null is not None and not isinstance(not_null, bool):
+            raise PolicyError(f"`quality.rules[{i}].not_null` must be boolean or null.")
+
+        min_v = rr.get("min", None)
+        max_v = rr.get("max", None)
+        if min_v is not None and not isinstance(min_v, (int, float)):
+            raise PolicyError(f"`quality.rules[{i}].min` must be a number or null.")
+        if max_v is not None and not isinstance(max_v, (int, float)):
+            raise PolicyError(f"`quality.rules[{i}].max` must be a number or null.")
+
+        accepted = rr.get("accepted_values", None)
+        if accepted is not None and not isinstance(accepted, list):
+            raise PolicyError(f"`quality.rules[{i}].accepted_values` must be a list or null.")
+
+        # Require at least one constraint per rule
+        if not any([not_null is not None, min_v is not None, max_v is not None, accepted is not None]):
+            raise PolicyError(f"`quality.rules[{i}]` must specify at least one check (not_null/min/max/accepted_values).")
+
+        parsed_rules.append(
+            QualityRule(
+                column=col,
+                not_null=not_null,
+                min=min_v,
+                max=max_v,
+                accepted_values=accepted,
+                on_fail=on_fail,
+            )
+        )
+
+    quality_policy = QualityPolicy(rules=tuple(parsed_rules), default_on_fail=default_on_fail)
+
+
+
+
 
     return Policy(
         version=version,
@@ -88,6 +160,7 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
             rename=rename,
             types=types,
             cast=CastPolicy(on_cast_fail=on_cast_fail, datetime_format=datetime_format),
+            quality=quality_policy,
             on_missing=on_missing,
             on_conflict=on_conflict,
         ),

@@ -22,3 +22,7 @@ class OnCastFail(str, Enum):
     ERROR = "error"
     DROP_ROW = "drop_row"
     SET_NULL = "set_null"
+
+class OnQualityFail(str, Enum):
+    ERROR = "error"
+    DROP_ROW = "drop_row"

@@ -5,11 +5,11 @@ from typing import Any
 
 import pandas as pd
 
-from custos.enums import OnCastFail, OnConflict, OnMissing
+from custos.enums import OnCastFail, OnConflict, OnMissing, OnQualityFail
 from custos.errors import ExecutionError
 from custos.execution.base import Executor
 from custos.planning.plan import Plan
-from custos.planning.steps import CastTypesStep, RenameColumnsStep
+from custos.planning.steps import CastTypesStep, QualityRulesStep, RenameColumnsStep
 from custos.report.models import Report
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,8 @@ class PandasExecutor(Executor):
                 out = self._rename(out, step, report, mode)
             elif isinstance(step, CastTypesStep):
                 out = self._cast_types(out, step, report, mode)
+            elif isinstance(step, QualityRulesStep):
+                out = self._quality(out, step, report, mode)
             else:
                 raise ExecutionError(f"Unsupported step type for pandas: {type(step)}")
 
@@ -188,6 +190,89 @@ class PandasExecutor(Executor):
 
         report.add("cast_applied", types=step.types)
         return out
+    
+    def _quality(self, df: pd.DataFrame, step: QualityRulesStep, report: Report, mode: str) -> pd.DataFrame:
+        # Validate referenced columns exist (in non-dry_run)
+        referenced = sorted({r["column"] for r in step.rules})
+        missing_cols = [c for c in referenced if c not in df.columns]
+
+        if mode == "dry_run":
+            report.add(
+                "quality_dry_run",
+                rule_count=len(step.rules),
+                referenced_columns=referenced,
+                missing_columns=missing_cols,
+            )
+            return df
+
+        if missing_cols:
+            raise ExecutionError(f"Quality rules reference missing columns: {missing_cols}")
+
+        # Evaluate rules
+        violations: list[dict] = []
+        drop_mask = pd.Series(False, index=df.index)
+
+        for idx, r in enumerate(step.rules):
+            col = r["column"]
+            s = df[col]
+            rule_id = f"{col}#{idx}"
+
+            # Determine rule's on_fail
+            on_fail = r.get("on_fail", None) or step.default_on_fail.value
+            on_fail_enum = OnQualityFail(on_fail)
+
+            rule_fail_mask = pd.Series(False, index=df.index)
+
+            if r.get("not_null") is True:
+                rule_fail_mask = rule_fail_mask | s.isna()
+
+            if r.get("min") is not None:
+                # assume numeric-compatible columns; cast already handled earlier
+                rule_fail_mask = rule_fail_mask | (s < r["min"])
+
+            if r.get("max") is not None:
+                rule_fail_mask = rule_fail_mask | (s > r["max"])
+
+            if r.get("accepted_values") is not None:
+                allowed = set(r["accepted_values"])
+                rule_fail_mask = rule_fail_mask | (~s.isin(list(allowed)) & s.notna())
+
+            count = int(rule_fail_mask.sum())
+            if count > 0:
+                samples = df.loc[rule_fail_mask, [col]].head(5).to_dict(orient="records")
+                violations.append(
+                    {
+                        "rule_id": rule_id,
+                        "column": col,
+                        "count": count,
+                        "on_fail": on_fail_enum.value,
+                        "checks": {k: v for k, v in r.items() if k not in ("column", "on_fail") and v is not None},
+                        "samples": samples,
+                    }
+                )
+
+                if on_fail_enum == OnQualityFail.ERROR:
+                    # fail fast with details
+                    report.add("quality_violations", violations=violations)
+                    raise ExecutionError(f"Quality rule failed: {violations[-1]}")
+
+                if on_fail_enum == OnQualityFail.DROP_ROW:
+                    drop_mask = drop_mask | rule_fail_mask
+
+        if violations:
+            report.add("quality_violations", violations=violations)
+
+        if drop_mask.any():
+            before = int(df.shape[0])
+            out = df.loc[~drop_mask].copy()
+            dropped = before - int(out.shape[0])
+            report.add("rows_dropped_due_to_quality", dropped=dropped)
+        else:
+            out = df
+
+        report.add("quality_applied", rule_count=len(step.rules))
+        return out
+   
 
     def _to_bool_series(self, s: pd.Series) -> tuple[pd.Series, pd.Series]:
         """

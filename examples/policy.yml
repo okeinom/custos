@@ -13,6 +13,15 @@ schema:
     on_cast_fail: set_null  # error | drop_row | set_null 
     date_format: "%Y-%m-%d"
 
+quality:
+  default_on_fail: drop_row
+  rules:
+    - column: total_price
+      not_null: true
+      min: 0
+
+    - column: order_id
+      not_null: true
 
   # Behavior when a source column is missing
   on_missing: warn      # error | warn | ignore
