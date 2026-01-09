@@ -1,7 +1,6 @@
 import pandas as pd
 from custos import PolicyTransformer
 
-
 def test_rename_columns_applies():
     df = pd.DataFrame({"Total Price": [10.0, 20.0], "Order ID": [1, 2]})
 
@@ -24,3 +23,13 @@ def test_rename_columns_applies():
     assert "Order ID" not in out.columns
     assert report.rows_in == 2
     assert report.rows_out == 2
+
+def test_rename_dry_run_does_not_modify():
+    df = pd.DataFrame({"A": [1]})
+    policy = {"schema": {"rename": {"A": "a"}}}
+
+    t = PolicyTransformer(policy, mode="dry_run")
+    out, report = t.apply(df)
+
+    assert "A" in out.columns
+    assert "a" not in out.columns
