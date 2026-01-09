@@ -139,7 +139,7 @@ Its feature set is deliberately constrained to remain predictable and auditable.
 ## Installation
 
 ```bash
-pip install custos
+pip install custos-guardrails
 ```
 ## Example: ingestion guardrails in action
 
