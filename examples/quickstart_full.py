@@ -9,7 +9,12 @@ POLICY_PATH = Path(__file__).resolve().parent / "policy.yml"
 df = pd.DataFrame({
     "Total Price": ["10.5", "oops", "30.25"],   # "oops" will fail float
     "Order ID": ["101", "102", "x"], 
-    "email": ["john@test.com", "bad-email", None],           # "x" will fail int
+    "email": ["john@test.com", "bad-email", None], 
+    "payload": [
+        {"user": {"name": "Ann", "roles": ["admin", "ops"]}},
+        {"user": {"name": "Bob"}},
+        None
+    ],                   # "x" will fail int
 })
 
 transformer = PolicyTransformer(

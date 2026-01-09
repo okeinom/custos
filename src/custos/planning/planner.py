@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from custos.planning.plan import Plan
-from custos.planning.steps import CastTypesStep, PiiStep, QualityRulesStep, RenameColumnsStep
+from custos.planning.steps import CastTypesStep, JsonFlattenStep, PiiStep, QualityRulesStep, RenameColumnsStep
 from custos.policy.model import Policy
 
 
@@ -11,6 +11,27 @@ class Planner:
 
     def build(self) -> Plan:
         steps = []
+
+        # 0) json flatten first
+        jf = self.policy.schema.json_flatten
+        if jf.rules:
+            steps.append(
+                JsonFlattenStep(
+                    rules=tuple(
+                        {
+                            "column": r.column,
+                            "prefix": r.prefix,
+                            "separator": r.separator,
+                            "max_depth": r.max_depth,
+                            "arrays": r.arrays.value,
+                            "collision": r.collision.value,
+                            "drop_source": r.drop_source,
+                        }
+                        for r in jf.rules
+                    ),
+                    on_missing=jf.on_missing.value,
+                )
+            )
 
         # 1) rename first
         if self.policy.schema.rename:

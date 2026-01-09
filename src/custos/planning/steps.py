@@ -6,7 +6,7 @@ from custos.enums import OnCastFail, OnConflict, OnMissing, OnQualityFail
 
 @dataclass(frozen=True)
 class RenameColumnsStep:
-    mapping: dict[str, str]
+    mapping: dict[str, str]              # old_name -> new_name
     on_missing: OnMissing
     on_conflict: OnConflict
 
@@ -24,4 +24,9 @@ class QualityRulesStep:
 @dataclass(frozen=True)
 class PiiStep:
     rules: tuple[dict, ...]   # dicts keep it engine-agnostic + serializable
+    on_missing: str
+
+@dataclass(frozen=True)
+class JsonFlattenStep:
+    rules: tuple[dict, ...]   # engine-agnostic dicts
     on_missing: str

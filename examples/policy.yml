@@ -36,3 +36,14 @@ quality:
 
     - column: order_id
       not_null: true
+      
+json_flatten:
+  on_missing: warn
+  rules:
+    - column: payload
+      prefix: payload
+      separator: "."
+      max_depth: 2
+      arrays: stringify
+      collision: suffix
+      drop_source: true

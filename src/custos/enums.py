@@ -37,3 +37,13 @@ class MaskStyle(str, Enum):
     EMAIL = "email"
     FIXED = "fixed"
     LAST4 = "last4"
+
+class JsonArrayHandling(str, Enum):
+    STRINGIFY = "stringify"
+    KEEP = "keep"
+
+
+class JsonCollision(str, Enum):
+    ERROR = "error"
+    OVERWRITE = "overwrite"
+    SUFFIX = "suffix"

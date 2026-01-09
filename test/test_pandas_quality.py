@@ -69,3 +69,20 @@ def test_quality_dry_run_does_not_change_df():
 
     kinds = [a.kind for a in report.actions]
     assert "quality_dry_run" in kinds
+
+def test_quality_named_rule_uses_name():
+    df = pd.DataFrame({"x": [1, -1]})
+    policy = {
+        "version": 1,
+        "quality": {
+            "rules": [
+                {"name": "x_non_negative", "column": "x", "min": 0}
+            ]
+        },
+    }
+
+    t = PolicyTransformer(policy=policy, mode="strict")
+    out, report = t.apply(df)
+
+    violations = next(a.details["violations"] for a in report.actions if a.kind == "quality_violations")
+    assert violations[0]["rule_id"] == "x_non_negative"

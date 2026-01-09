@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from typing import Any
 
 import pandas as pd
 
-from custos.enums import MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
+from custos.enums import JsonArrayHandling, JsonCollision, MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
 from custos.errors import ExecutionError
 from custos.execution.base import Executor
 from custos.planning.plan import Plan
-from custos.planning.steps import CastTypesStep, PiiStep, QualityRulesStep, RenameColumnsStep
+from custos.planning.steps import CastTypesStep, JsonFlattenStep, PiiStep, QualityRulesStep, RenameColumnsStep
 from custos.report.models import Report
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,9 @@ class PandasExecutor(Executor):
         )
 
         for step in plan.steps:
-            if isinstance(step, RenameColumnsStep):
+            if isinstance(step, JsonFlattenStep):
+                out = self._json_flatten(out, step, report, mode)
+            elif isinstance(step, RenameColumnsStep):
                 out = self._rename(out, step, report, mode)
             elif isinstance(step, CastTypesStep):
                 out = self._cast_types(out, step, report, mode)
@@ -390,7 +393,110 @@ class PandasExecutor(Executor):
 
         report.add("quality_applied", rule_count=len(step.rules))
         return out
-   
+
+    def _json_flatten(self, df: pd.DataFrame, step: JsonFlattenStep, report: Report, mode: str) -> pd.DataFrame:
+        rules = list(step.rules)
+        missing_cols = [r["column"] for r in rules if r["column"] not in df.columns]
+
+        if missing_cols:
+            msg = f"JSON flatten rules reference missing columns: {missing_cols}"
+            if step.on_missing == OnMissing.ERROR.value:
+                raise ExecutionError(msg)
+            if step.on_missing == OnMissing.WARN.value:
+                log.warning(msg)
+                report.add("json_flatten_missing_columns", missing=missing_cols)
+            else:
+                report.add("json_flatten_missing_columns_ignored", missing=missing_cols)
+
+        rules = [r for r in rules if r["column"] in df.columns]
+
+        if mode == "dry_run":
+            report.add("json_flatten_dry_run", rules=rules)
+            return df
+
+        out = df.copy()
+
+        for r in rules:
+            col = r["column"]
+            prefix = r.get("prefix")
+            sep = r.get("separator", ".")
+            max_depth = int(r.get("max_depth", 2))
+            arrays = JsonArrayHandling(r.get("arrays", "stringify"))
+            collision = JsonCollision(r.get("collision", "error"))
+            drop_source = bool(r.get("drop_source", False))
+
+            records = []
+            for v in out[col].tolist():
+                if pd.isna(v):
+                    records.append({})
+                    continue
+                if isinstance(v, dict):
+                    records.append(v)
+                    continue
+                if isinstance(v, str):
+                    try:
+                        parsed = json.loads(v)
+                    except Exception:
+                        parsed = v
+                    if isinstance(parsed, dict):
+                        records.append(parsed)
+                    elif isinstance(parsed, list):
+                        # arrays in the root
+                        records.append({"_array": parsed})
+                    else:
+                        records.append({"_value": parsed})
+                    continue
+                if isinstance(v, list):
+                    records.append({"_array": v})
+                    continue
+                records.append({"_value": v})
+
+            # Normalize nested dicts
+            norm = pd.json_normalize(records, sep=sep, max_level=max_depth if max_depth >= 0 else None)
+
+            # Handle arrays: stringify any list values inside normalized frame
+            if arrays == JsonArrayHandling.STRINGIFY:
+                for c in norm.columns:
+                    norm[c] = norm[c].apply(lambda x: json.dumps(x) if isinstance(x, list) else x)
+
+            # Apply prefix
+            if prefix:
+                norm.columns = [f"{prefix}{sep}{c}" for c in norm.columns]
+
+            # Merge into out with collision handling
+            new_cols = []
+            for c in norm.columns:
+                target = c
+                if target in out.columns:
+                    if collision == JsonCollision.ERROR:
+                        raise ExecutionError(f"JSON flatten column collision: '{target}' already exists")
+                    if collision == JsonCollision.OVERWRITE:
+                        pass
+                    if collision == JsonCollision.SUFFIX:
+                        base = target
+                        k = 1
+                        while target in out.columns:
+                            target = f"{base}_{k}"
+                            k += 1
+                out[target] = norm[c].values
+                new_cols.append(target)
+
+            if drop_source:
+                out = out.drop(columns=[col])
+
+            report.add(
+                "json_flatten_applied",
+                column=col,
+                created_columns=new_cols,
+                drop_source=drop_source,
+                max_depth=max_depth,
+                separator=sep,
+                arrays=arrays.value,
+                collision=collision.value,
+            )
+
+        return out
+  
 
     def _to_bool_series(self, s: pd.Series) -> tuple[pd.Series, pd.Series]:
         """

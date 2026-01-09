@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from custos.enums import MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
+from custos.enums import JsonArrayHandling, JsonCollision, MaskStyle, OnCastFail, OnConflict, OnMissing, OnQualityFail, PiiAction
 from custos.errors import PolicyError
 
 
@@ -10,7 +10,7 @@ from custos.errors import PolicyError
 class CastPolicy:
     on_cast_fail: OnCastFail = OnCastFail.ERROR
     datetime_format: str | None = None
-    
+
 @dataclass(frozen=True)
 class QualityRule:
     column: str
@@ -47,12 +47,29 @@ class PiiPolicy:
     on_missing: OnMissing = OnMissing.WARN   
 
 @dataclass(frozen=True)
+class JsonFlattenRule:
+    column: str
+    prefix: str | None = None
+    separator: str = "."
+    max_depth: int = 2
+    arrays: JsonArrayHandling = JsonArrayHandling.STRINGIFY
+    collision: JsonCollision = JsonCollision.ERROR
+    drop_source: bool = False
+
+
+@dataclass(frozen=True)
+class JsonFlattenPolicy:
+    rules: tuple[JsonFlattenRule, ...] = ()
+    on_missing: OnMissing = OnMissing.WARN
+
+@dataclass(frozen=True)
 class SchemaPolicy:
     rename: dict[str, str] = field(default_factory=dict)
     types: dict[str, str] = field(default_factory=dict)  # e.g. {"order_id": "int"}
     cast: CastPolicy = field(default_factory=CastPolicy)
     quality: QualityPolicy = field(default_factory=QualityPolicy)
     pii: PiiPolicy = field(default_factory=PiiPolicy)
+    json_flatten: JsonFlattenPolicy = field(default_factory=JsonFlattenPolicy)
     on_missing: OnMissing = OnMissing.WARN
     on_conflict: OnConflict = OnConflict.ERROR
 
@@ -235,6 +252,58 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
 
     pii_policy = PiiPolicy(rules=tuple(pii_rules), on_missing=pii_on_missing)
 
+    # --- json_flatten ---
+    jf_raw = raw.get("json_flatten", {}) or {}
+    if not isinstance(jf_raw, Mapping):
+        raise PolicyError("`json_flatten` must be a mapping.")
+
+    jf_on_missing = OnMissing(jf_raw.get("on_missing", OnMissing.WARN))
+
+    rules_raw = jf_raw.get("rules", []) or []
+    if not isinstance(rules_raw, list):
+        raise PolicyError("`json_flatten.rules` must be a list.")
+
+    jf_rules: list[JsonFlattenRule] = []
+    for i, rr in enumerate(rules_raw):
+        if not isinstance(rr, Mapping):
+            raise PolicyError(f"`json_flatten.rules[{i}]` must be a mapping.")
+
+        col = rr.get("column")
+        if not isinstance(col, str) or not col.strip():
+            raise PolicyError(f"`json_flatten.rules[{i}].column` must be a non-empty string.")
+
+        prefix = rr.get("prefix", None)
+        if prefix is not None and not isinstance(prefix, str):
+            raise PolicyError(f"`json_flatten.rules[{i}].prefix` must be a string or null.")
+
+        sep = rr.get("separator", ".")
+        if not isinstance(sep, str) or not sep:
+            raise PolicyError(f"`json_flatten.rules[{i}].separator` must be a non-empty string.")
+
+        max_depth = rr.get("max_depth", 2)
+        if not isinstance(max_depth, int) or max_depth < 0:
+            raise PolicyError(f"`json_flatten.rules[{i}].max_depth` must be an int >= 0.")
+
+        arrays = JsonArrayHandling(str(rr.get("arrays", "stringify")).lower())
+        collision = JsonCollision(str(rr.get("collision", "error")).lower())
+
+        drop_source = rr.get("drop_source", False)
+        if not isinstance(drop_source, bool):
+            raise PolicyError(f"`json_flatten.rules[{i}].drop_source` must be boolean.")
+
+        jf_rules.append(
+            JsonFlattenRule(
+                column=col,
+                prefix=prefix,
+                separator=sep,
+                max_depth=max_depth,
+                arrays=arrays,
+                collision=collision,
+                drop_source=drop_source,
+            )
+        )
+
+    json_flatten_policy = JsonFlattenPolicy(rules=tuple(jf_rules), on_missing=jf_on_missing)
 
 
 
@@ -246,6 +315,7 @@ def policy_from_dict(raw: Mapping[str, Any]) -> Policy:
             cast=CastPolicy(on_cast_fail=on_cast_fail, datetime_format=datetime_format),
             quality=quality_policy,
             pii=pii_policy,
+            json_flatten=json_flatten_policy,
             on_missing=on_missing,
             on_conflict=on_conflict,
         ),
